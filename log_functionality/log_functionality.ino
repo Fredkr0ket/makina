@@ -76,7 +76,7 @@ void loop() {
   if (currentTime - lastLogTime >= THIRTY_SECONDS) {
     lastLogTime = currentTime;
     Serial.println("5 minutes passed");
-    logPeriodicalData();
+    logData("/periodical_logs.csv", 220, 2, 50);
   }
 }
 
@@ -94,44 +94,22 @@ void createFileIfNotExists(const char* path) {
   }
 }
 
-void logPeriodicalData() {
-  // dummy data
-  const int voltage = 220;
-  const int current = 2;
-  const int temperature = 50;
+
+void logData(const char* logPath, const int voltage, const int current, const int temperature) {
   // Initialize logFile object
-  const char* logPath = "/periodical_logs.csv";
   File logFile = SD.open(logPath, FILE_APPEND);
 
   // Get currentTime
   String currentTime = getCurrentTimeString();
   Serial.println("Current time: " + currentTime);
 
-  if (logFile) {
+  if (logPath == "/periodical_logs.csv" && logFile) {
     String status = getLogStatus(voltage, current, temperature);
     String logData = String(currentTime) + ";" + status + ";" + String(voltage) + ";" + String(current) + ";" + String(temperature) + "\n";
     Serial.println("Log data: " + logData);
     logFile.print(logData); // Append data
     logFile.close();
-  } else {
-    Serial.printf("Failed to open logfile: %s\n", logPath);
-  }
-}
-
-void logCriticalData() {
-  // Initialize logFile object
-  const char* logPath = "/critical_logs.csv";
-  File logFile = SD.open(logPath, FILE_APPEND);
-
-  const int voltage = 260;
-  const int current = 2;
-  const int temperature = 50;
-
-  // Get currentTime
-  String currentTime = getCurrentTimeString();
-  Serial.println("Current time: " + currentTime);
-
-  if (logFile) {
+  } else if (logPath == "/critical_logs.csv" && logFile) {
     String logData = String(currentTime) + ";" + "CRITICAL;" + String(voltage) + ";" + String(current) + ";" + String(temperature) + "\n";
     Serial.println("Log data: " + logData);
     logFile.print(logData); // Append data
@@ -168,9 +146,9 @@ String getLogStatus(int voltage, int current, int temperature) {
     return "test";
   }
 
-  if (voltage >= config["critical_threshold"]["voltage"] || current >= config["critical_threshold"]["current"] || temperature >= config["critical_threshold"]["temperature"]) {
+  if (voltage >= config["critical_threshold"]["over_voltage"] || voltage <= config["critical_threshold"]["under_voltage"] || current >= config["critical_threshold"]["current"] || temperature >= config["critical_threshold"]["temperature"]) {
     return "CRITICAL";
-  } else if (voltage >= config["warning_threshold"]["voltage"] || current >= config["warning_threshold"]["current"] || temperature >= config["warning_threshold"]["temperature"]) {
+  } else if (voltage >= config["warning_threshold"]["over_voltage"] || voltage <= config["warning_threshold"]["under_voltage"] || current >= config["warning_threshold"]["current"] || temperature >= config["warning_threshold"]["temperature"]) {
     return "WARNING";
   } else {
     return "NORMAL";
