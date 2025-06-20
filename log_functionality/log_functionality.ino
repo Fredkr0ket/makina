@@ -20,7 +20,7 @@ CONFIG FILE EXAMPLE
 }
 */
 
-#define SD_CS 5  // Chip Select pin
+#define SD_CS 22  // Chip Select pin
 #define LOG_INTERVAL 300000UL
 #define THIRTY_SECONDS 30000UL // Test time
 unsigned long lastLogTime = 0;
@@ -68,12 +68,50 @@ void setup() {
     Serial.println("Wifi connected");
   }
 
+
+  
 }
 
 void loop() { 
+  // dummy data
+  int voltage = 280;
+  int current = 2;
+  int temperature = 50;
+
   unsigned long currentTime = millis(); // Get current time
-;
-  if (currentTime - lastLogTime >= THIRTY_SECONDS) {
+
+  // Open en read config file
+  const char* configPath = "/config.json";
+  File configFile = SD.open(configPath, FILE_READ);
+
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    return;
+  }
+
+  StaticJsonDocument<256> config;
+  DeserializationError error = deserializeJson(config, configFile);
+  configFile.close();
+
+  if (error) {
+    Serial.print("deserializeJson failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  logData("/critical_logs.csv", voltage, current, temperature);
+  delay(5000);
+  if (
+    voltage >= config["critical_threshold"]["over_voltage"] ||
+    voltage <= config["critical_threshold"]["under_voltage"] ||
+    current >= config["critical_threshold"]["current"] ||
+    temperature >= config["critical_threshold"]["temperature"]
+  ) {
+    logData("/critical_logs.csv", voltage, current, temperature);
+    delay(5000);
+  }
+
+  if (currentTime - lastLogTime >= LOG_INTERVAL) {
     lastLogTime = currentTime;
     Serial.println("5 minutes passed");
     logData("/periodical_logs.csv", 220, 2, 50);
@@ -143,7 +181,7 @@ String getLogStatus(int voltage, int current, int temperature) {
     Serial.print("deserializeJson failed: ");
     Serial.println(error.c_str());
     configFile.close();
-    return "test";
+    return "Error reading config";
   }
 
   if (voltage >= config["critical_threshold"]["over_voltage"] || voltage <= config["critical_threshold"]["under_voltage"] || current >= config["critical_threshold"]["current"] || temperature >= config["critical_threshold"]["temperature"]) {
