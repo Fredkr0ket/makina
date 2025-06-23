@@ -3,7 +3,7 @@
 #include <WiFi.h>
 #include "time.h"
 #include <ArduinoJson.h>
-
+#include "EmonLib.h"
 /*
 CONFIG FILE EXAMPLE
 {
@@ -19,6 +19,8 @@ CONFIG FILE EXAMPLE
     }
 }
 */
+
+#define strobeLight 33
 
 #define SD_CS 22  // Chip Select pin
 #define LOG_INTERVAL 300000UL
@@ -38,15 +40,24 @@ const char* ntpServer = "nl.pool.ntp.org";
 // const int temperature = 69;
 // const char* status = "critical" 
 
+// initialize EmonLib
+EnergyMonitor emon1;    
+
+
 void setup() {
   // Initialize serial and WiFi connection
   Serial.begin(115200);
   WiFi.begin(ssid, password);
   delay(2000);
-  
+
+  // Initialize strobelight output pin
+  pinMode(strobeLight, OUTPUT);
 
   // ESP32 restart reason
   // Serial.println("Reset reason: " + String(esp_reset_reason()));
+
+  // calibrate EmonLib
+  emon1.current(1, 111.1);
 
   // ---- SD CARD MODULE ---- //
   // Initializing SD card
@@ -67,15 +78,12 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("Wifi connected");
   }
-
-
-  
 }
 
 void loop() { 
   // dummy data
   int voltage = 280;
-  int current = 2;
+  double current = emon1.calcIrms(1480);
   int temperature = 50;
 
   unsigned long currentTime = millis(); // Get current time
@@ -108,7 +116,10 @@ void loop() {
     temperature >= config["critical_threshold"]["temperature"]
   ) {
     logData("/critical_logs.csv", voltage, current, temperature);
+    digitalWrite(strobeLight, HIGH);
     delay(5000);
+  } else {
+    digitalWrite(strobeLight, LOW);
   }
 
   if (currentTime - lastLogTime >= LOG_INTERVAL) {
