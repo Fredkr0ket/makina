@@ -4,27 +4,54 @@
 #include "time.h"
 #include <ArduinoJson.h>
 #include "EmonLib.h"
+#include <SPI.h>
+#include "MAX6675.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <ZMPT101B.h>
+#include <Fonts/FreeSans9pt7b.h>  // Include one of the GFX fonts
+
 /*
 CONFIG FILE EXAMPLE
 {
     "critical_threshold": {
-        "voltage": 260,
+        "over_voltage": 260,
+        "under_voltage": 190,
         "current": 10,
         "temperature": 100
     },
     "warning_threshold": {
-        "voltage": 240,
+        "over_voltage": 240,
+        "under_voltage": 200,
         "current": 5,
         "temperature": 80
     }
 }
 */
 
+// oled variables
+#define SCREEN_WIDTH 128  // OLED width
+#define SCREEN_HEIGHT 64  // OLED height
+#define OLED_RESET    -1  // Reset pin (-1 for shared reset)
+#define SCREEN_ADDRESS 0x3C  // I2C address for 128x64 OLEDs
+#define SDA_PIN 21  // GPIO4
+#define SCL_PIN 25 // GPIO2
+
+// voltage variables
+#define SENSITIVITY 504  // Voltage sensor sensitivity
+#define ADC_PIN 39  // ADC input pin
+
+ZMPT101B voltageSensor(ADC_PIN, 50.0);  // Sensor instance
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);  // OLED instance
+
+// strobeLight pinout
 #define strobeLight 33
 
-#define SD_CS 22  // Chip Select pin
-#define LOG_INTERVAL 300000UL
-#define THIRTY_SECONDS 30000UL // Test time
+// log variables
+#define sdChipselect 22 
+#define logInterval 300000UL
+#define thirtySeconds 30000UL // Test time
 unsigned long lastLogTime = 0;
 
 // Wifi parameters
@@ -34,41 +61,60 @@ const char* password = "kaaskaas123";
 // NTP time settings
 const char* ntpServer = "nl.pool.ntp.org";
 
-// Dummy data
-// const int voltage = 220;
-// const int current = 16;
-// const int temperature = 69;
-// const char* status = "critical" 
-
 // initialize EmonLib
-EnergyMonitor emon1;    
+EnergyMonitor emon1;   
 
+// initialize MAX6675
+const uint8_t MAX6675_CS = 5;
+MAX6675 thermocouple(MAX6675_CS, &SPI);
 
 void setup() {
-  // Initialize serial and WiFi connection
+  // Initialize serial, WiFi and SPI connection
   Serial.begin(115200);
   WiFi.begin(ssid, password);
+  SPI.begin();
+  Wire.begin(SDA_PIN, SCL_PIN);
   delay(2000);
+
+  // Set voltage sensitivity
+  voltageSensor.setSensitivity(SENSITIVITY);
+
+  // Init OLED display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+      Serial.println("SSD1306 allocation failed");
+      for (;;); // Halt if display fails
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
 
   // Initialize strobelight output pin
   pinMode(strobeLight, OUTPUT);
 
-  // ESP32 restart reason
-  // Serial.println("Reset reason: " + String(esp_reset_reason()));
-
   // calibrate EmonLib
-  emon1.current(1, 111.1);
+  emon1.current(32, 30);
 
   // ---- SD CARD MODULE ---- //
-  // Initializing SD card
-  if (SD.begin(SD_CS)) {
+  if (SD.begin(sdChipselect)) {
     Serial.println("SD card initialized.");
   } else {
     Serial.println("Card failed, or not present.");
     return;
   }
+
+  // initialize thermocouple 
+  thermocouple.begin();
+  uint8_t status = thermocouple.read();
+  if(status == STATUS_OK) {
+    Serial.println("Thermocouple initialized");
+  } else {
+    Serial.println("Error while trying to initialized Thermocouple");
+  }
   
-  // Check if periodical_log.yaml and critical_log.yaml exists
+  // ESP32 restart reason
+  //  Serial.println("Reset reason: " + String(esp_reset_reason()));
+  
   createFileIfNotExists("/periodical_logs.csv");
   createFileIfNotExists("/critical_logs.csv");
   createFileIfNotExists("/config.json");
@@ -81,14 +127,37 @@ void setup() {
 }
 
 void loop() { 
-  // dummy data
-  int voltage = 280;
+  // ---- DUMMY DATA ---- //
+  // int voltage = 220;
+  // int temperature = 5;
+  // --------------------- //
+
+  // ---- SENSOR MESUREMENTS ---//
+  float voltage = voltageSensor.getRmsVoltage();
   double current = emon1.calcIrms(1480);
-  int temperature = 50;
+  thermocouple.read();
+  delay(50);
+  float temperature = thermocouple.getCelsius();
+  // --------------------- //
 
-  unsigned long currentTime = millis(); // Get current time
+  Serial.println("temp: " + String(temperature));
+  Serial.println("current: " + String(current/4));
+  Serial.println("voltage: " + String(voltage));
 
-  // Open en read config file
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setFont(&FreeSans9pt7b);  // Set custom font
+  display.setCursor(0, 16);         // Y-position is baseline
+  display.println("Amps: " + String(current) +"A");
+  display.setCursor(0, 34);
+  display.println("Volt:   " + String(voltage) + "V");
+  display.setCursor(0, 52);
+  display.println("Temp: " + String(temperature) + "C");
+  display.display();
+  // delay(1000);
+
+
+  // ---- READ CONFIG FILE ---- //
   const char* configPath = "/config.json";
   File configFile = SD.open(configPath, FILE_READ);
 
@@ -106,27 +175,31 @@ void loop() {
     Serial.println(error.c_str());
     return;
   }
+  // --------------------- //
 
-  logData("/critical_logs.csv", voltage, current, temperature);
-  delay(5000);
-  if (
-    voltage >= config["critical_threshold"]["over_voltage"] ||
-    voltage <= config["critical_threshold"]["under_voltage"] ||
-    current >= config["critical_threshold"]["current"] ||
-    temperature >= config["critical_threshold"]["temperature"]
-  ) {
-    logData("/critical_logs.csv", voltage, current, temperature);
-    digitalWrite(strobeLight, HIGH);
-    delay(5000);
-  } else {
-    digitalWrite(strobeLight, LOW);
-  }
+  // ---- CRITICAL LOG ---- //
+  // if (
+  //   voltage >= config["critical_threshold"]["over_voltage"] ||
+  //   voltage <= config["critical_threshold"]["under_voltage"] ||
+  //   current >= config["critical_threshold"]["current"] ||
+  //   temperature >= config["critical_threshold"]["temperature"]
+  // ) {
+  //   logData("/critical_logs.csv", voltage, current, temperature);
+  //   digitalWrite(strobeLight, HIGH);
+  //   delay(5000);
+  // } else {
+  //   digitalWrite(strobeLight, LOW);
+  // }
+  // --------------------- //
 
-  if (currentTime - lastLogTime >= LOG_INTERVAL) {
+  // ---- PERIODICAL LOG ---- //
+  unsigned long currentTime = millis();
+  if (currentTime - lastLogTime >= thirtySeconds) {
     lastLogTime = currentTime;
     Serial.println("5 minutes passed");
     logData("/periodical_logs.csv", 220, 2, 50);
   }
+  // --------------------- //
 }
 
 void createFileIfNotExists(const char* path) {
